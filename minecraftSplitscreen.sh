@@ -27,7 +27,7 @@ export target=/tmp
 # =============================
 # Function: detectLauncher
 # =============================
-# Detects PollyMC launcher for splitscreen gameplay.
+# Detects available launcher (PollyMC or PrismLauncher) for splitscreen gameplay.
 # Returns launcher paths and executable info.
 detectLauncher() {
     # Check if PollyMC is available
@@ -38,8 +38,18 @@ detectLauncher() {
         return 0
     fi
     
-    echo "[Error] PollyMC not found at $HOME/.local/share/PollyMC/" >&2
-    echo "[Error] Please run the Minecraft Splitscreen installer to set up PollyMC" >&2
+    # Fallback: Check if PrismLauncher is available
+    if [ -f "$HOME/.local/share/PrismLauncher/PrismLauncher.AppImage" ] && [ -x "$HOME/.local/share/PrismLauncher/PrismLauncher.AppImage" ]; then
+        export LAUNCHER_DIR="$HOME/.local/share/PrismLauncher"
+        export LAUNCHER_EXEC="$HOME/.local/share/PrismLauncher/PrismLauncher.AppImage"
+        export LAUNCHER_NAME="PrismLauncher"
+        return 0
+    fi
+    
+    echo "[Error] No compatible Minecraft launcher found!" >&2
+    echo "[Error] Expected PollyMC at: $HOME/.local/share/PollyMC/PollyMC-Linux-x86_64.AppImage" >&2
+    echo "[Error] Or PrismLauncher at: $HOME/.local/share/PrismLauncher/PrismLauncher.AppImage" >&2
+    echo "[Error] Please run the Minecraft Splitscreen installer to set up a launcher" >&2
     return 1
 }
 

@@ -68,6 +68,7 @@ setup_pollymc() {
         print_info "   This is not a critical error - PrismLauncher works fine for splitscreen"
         USE_POLLYMC=false  # Global flag tracks which launcher is active
         setup_prism_launcher  # Set up PrismLauncher script before returning
+        cleanup_pollymc_launcher  # Clean up any partial PollyMC setup
         return 0
     else
         # APPIMAGE PERMISSIONS: Make the downloaded AppImage executable
@@ -357,12 +358,23 @@ cleanup_pollymc_launcher() {
     
     local pollymc_dir="$HOME/.local/share/PollyMC"
     
+    # Check if directory exists first
+    if [[ ! -d "$pollymc_dir" ]]; then
+        print_info "PollyMC directory does not exist - nothing to clean up"
+        return 0
+    fi
+    
     # SAFETY CHECKS: Multiple validations before removing directories
     # Ensure we're not deleting critical system directories or user home
-    if [[ -d "$pollymc_dir" && "$pollymc_dir" != "$HOME" && "$pollymc_dir" != "/" && "$pollymc_dir" == *"PollyMC"* ]]; then
+    if [[ "$pollymc_dir" != "$HOME" && "$pollymc_dir" != "/" && "$pollymc_dir" == *"PollyMC"* ]]; then
         rm -rf "$pollymc_dir"
-        print_success "Removed PollyMC directory: $pollymc_dir"
-        print_info "All essential files remain in PrismLauncher directory"
+        if [[ ! -d "$pollymc_dir" ]]; then
+            print_success "Removed PollyMC directory: $pollymc_dir"
+            print_info "All essential files remain in PrismLauncher directory"
+        else
+            print_warning "Failed to remove PollyMC directory: $pollymc_dir"
+            print_info "Directory may be in use or permission denied"
+        fi
     else
         print_warning "Skipped directory removal for safety: $pollymc_dir"
     fi
