@@ -10,7 +10,9 @@
 # Functions provided:
 # - setup_pollymc: Configure PollyMC as the primary splitscreen launcher
 # - setup_pollymc_launcher: Configure splitscreen launcher script for PollyMC
+# - setup_prism_launcher: Configure splitscreen launcher script for PrismLauncher fallback
 # - cleanup_prism_launcher: Clean up PrismLauncher files after PollyMC setup
+# - cleanup_pollymc_launcher: Clean up PollyMC files when falling back to PrismLauncher
 #
 # =============================================================================
 
@@ -65,6 +67,7 @@ setup_pollymc() {
         print_warning "❌ PollyMC download failed - continuing with PrismLauncher as primary launcher"
         print_info "   This is not a critical error - PrismLauncher works fine for splitscreen"
         USE_POLLYMC=false  # Global flag tracks which launcher is active
+        setup_prism_launcher  # Set up PrismLauncher script before returning
         return 0
     else
         # APPIMAGE PERMISSIONS: Make the downloaded AppImage executable
@@ -263,6 +266,18 @@ EOF
         print_info "   → Falling back to PrismLauncher for gameplay (still fully functional)"
         USE_POLLYMC=false
     fi
+    
+    # =============================================================================
+    # FALLBACK HANDLING: Setup PrismLauncher if PollyMC failed
+    # =============================================================================
+    
+    # FALLBACK SETUP: If PollyMC failed at any step, ensure PrismLauncher is properly configured
+    # This handles all failure scenarios: download failure, compatibility test failure, instance verification failure
+    # Ensures the splitscreen launcher script is always available regardless of which launcher is active
+    if [[ "$USE_POLLYMC" == false ]]; then
+        setup_prism_launcher
+        cleanup_pollymc_launcher
+    fi
 }
 
 # Configure the splitscreen launcher script for PollyMC
@@ -290,6 +305,25 @@ setup_pollymc_launcher() {
     fi
 }
 
+# Configure the splitscreen launcher script for PrismLauncher
+# Downloads the launcher script to PrismLauncher directory without path modifications
+# This is used as a fallback when PollyMC setup fails
+setup_prism_launcher() {
+    print_progress "Setting up launcher script for PrismLauncher..."
+    
+    # LAUNCHER SCRIPT DOWNLOAD: Get the splitscreen launcher script from GitHub
+    # This script handles controller detection and multi-instance launching
+    # The script already uses PrismLauncher paths by default, so no sed modifications are needed
+    if wget -O "$TARGET_DIR/minecraftSplitscreen.sh" \
+        "https://raw.githubusercontent.com/FlyingEwok/MinecraftSplitscreenSteamdeck/main/minecraftSplitscreen.sh"; then
+        chmod +x "$TARGET_DIR/minecraftSplitscreen.sh"
+        
+        print_success "Launcher script configured and copied to PrismLauncher"
+    else
+        print_warning "Failed to download launcher script"
+    fi
+}
+
 # Clean up PrismLauncher installation after successful PollyMC setup
 # This removes the temporary PrismLauncher directory to save disk space
 # PrismLauncher was only needed for automated instance creation via CLI
@@ -308,5 +342,28 @@ cleanup_prism_launcher() {
         print_info "All essential files now in PollyMC directory"
     else
         print_warning "Skipped directory removal for safety: $TARGET_DIR"
+    fi
+}
+
+# Clean up PollyMC installation when falling back to PrismLauncher
+# This removes any partial PollyMC setup to avoid confusion and save disk space
+# Called when PollyMC download or setup fails at any stage
+cleanup_pollymc_launcher() {
+    print_progress "Cleaning up PollyMC (falling back to PrismLauncher)..."
+    
+    # SAFETY: Navigate to home directory before removal operations
+    # This prevents accidental deletion if we're currently in the target directory
+    cd "$HOME" || return 1
+    
+    local pollymc_dir="$HOME/.local/share/PollyMC"
+    
+    # SAFETY CHECKS: Multiple validations before removing directories
+    # Ensure we're not deleting critical system directories or user home
+    if [[ -d "$pollymc_dir" && "$pollymc_dir" != "$HOME" && "$pollymc_dir" != "/" && "$pollymc_dir" == *"PollyMC"* ]]; then
+        rm -rf "$pollymc_dir"
+        print_success "Removed PollyMC directory: $pollymc_dir"
+        print_info "All essential files remain in PrismLauncher directory"
+    else
+        print_warning "Skipped directory removal for safety: $pollymc_dir"
     fi
 }
