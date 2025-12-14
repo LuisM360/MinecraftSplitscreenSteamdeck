@@ -389,21 +389,77 @@ getControllerCount() {
                     done
                 fi
                 
-                # If GUID matching didn't find duplicates, try name-based matching
-                if [ ${#group_members[@]} -eq 1 ]; then
-                    local base_name=""
-                    if [ -n "$name" ]; then
-                        # Extract base name (remove Steam Input suffixes)
-                        # Handle patterns like "ControllerName Steam Virtual Gamepad", "ControllerName Virtual", etc.
-                        base_name=$(echo "$name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//' | sed 's/[[:space:]]*Gamepad.*$//' | sed 's/[[:space:]]*$//')
-                    fi
+                # Always try name-based matching as well (Steam Input might create devices with different GUIDs)
+                # Extract base name for comparison
+                local base_name=""
+                if [ -n "$name" ]; then
+                    # Extract base name (remove Steam Input suffixes)
+                    # Handle patterns like "ControllerName Steam Virtual Gamepad", "ControllerName Virtual", etc.
+                    base_name=$(echo "$name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//' | sed 's/[[:space:]]*Gamepad.*$//' | sed 's/[[:space:]]*$//')
+                fi
+                
+                # If we haven't found duplicates yet, or if base name is available, try name-based matching
+                if [ ${#group_members[@]} -eq 1 ] && [ -n "$base_name" ]; then
+                    [ "$debug" = "1" ] && echo "[Debug] Checking for duplicates of $device by name (base: $base_name)" >&2
+                    for j in "${!valid_controllers[@]}"; do
+                        [ "$i" -eq "$j" ] && continue
+                        local other_device="${valid_controllers[$j]}"
+                        local other_name="${device_names[$j]}"
+                        
+                        # Check if already processed
+                        local already_proc=0
+                        for proc_dev in "${processed[@]}"; do
+                            [ "$proc_dev" = "$other_device" ] && already_proc=1 && break
+                        done
+                        [ "$already_proc" -eq 1 ] && continue
+                        
+                        # Extract base name from other device
+                        local other_base=""
+                        if [ -n "$other_name" ]; then
+                            other_base=$(echo "$other_name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//' | sed 's/[[:space:]]*Gamepad.*$//' | sed 's/[[:space:]]*$//')
+                        fi
+                        
+                        # Check if base names match (accounting for Steam Input variations)
+                        # Also check if names are similar (fuzzy matching for edge cases)
+                        if [ -n "$base_name" ] && [ -n "$other_base" ]; then
+                            if [ "$base_name" = "$other_base" ]; then
+                                group_members+=("$other_device")
+                                processed+=("$other_device")
+                                [ "$debug" = "1" ] && echo "[Debug] Grouping duplicate by name: $other_device ($other_name) with $device ($name)" >&2
+                            # Additional check: if one name contains the other (for partial matches)
+                            elif echo "$base_name" | grep -qiF "$other_base" || echo "$other_base" | grep -qiF "$base_name"; then
+                                # Only group if names are substantial (not single characters)
+                                if [ ${#base_name} -gt 3 ] && [ ${#other_base} -gt 3 ]; then
+                                    group_members+=("$other_device")
+                                    processed+=("$other_device")
+                                    [ "$debug" = "1" ] && echo "[Debug] Grouping duplicate by fuzzy name match: $other_device ($other_name) with $device ($name)" >&2
+                                fi
+                            fi
+                        fi
+                    done
+                fi
+                
+                # If still no duplicates found and Steam is running, try more aggressive grouping
+                # Steam Input typically creates exactly 2 devices per controller (original + virtual)
+                # If we have an even number of devices and Steam is running, try pairing them
+                if [ ${#group_members[@]} -eq 1 ] && [ "$steam_running" -eq 1 ] && [ ${#valid_controllers[@]} -gt 1 ]; then
+                    # Count how many unprocessed devices remain
+                    local unprocessed_count=0
+                    for j in "${!valid_controllers[@]}"; do
+                        local check_device="${valid_controllers[$j]}"
+                        local is_processed=0
+                        for proc_dev in "${processed[@]}"; do
+                            [ "$proc_dev" = "$check_device" ] && is_processed=1 && break
+                        done
+                        [ "$is_processed" -eq 0 ] && unprocessed_count=$((unprocessed_count + 1))
+                    done
                     
-                    if [ -n "$base_name" ]; then
-                        [ "$debug" = "1" ] && echo "[Debug] Checking for duplicates of $device by name (base: $base_name)" >&2
+                    # If we have unprocessed devices and this device hasn't been grouped,
+                    # try to pair it with the first unprocessed device (heuristic for Steam Input)
+                    if [ "$unprocessed_count" -gt 0 ] && [ ${#group_members[@]} -eq 1 ]; then
                         for j in "${!valid_controllers[@]}"; do
                             [ "$i" -eq "$j" ] && continue
                             local other_device="${valid_controllers[$j]}"
-                            local other_name="${device_names[$j]}"
                             
                             # Check if already processed
                             local already_proc=0
@@ -412,17 +468,13 @@ getControllerCount() {
                             done
                             [ "$already_proc" -eq 1 ] && continue
                             
-                            # Extract base name from other device
-                            local other_base=""
-                            if [ -n "$other_name" ]; then
-                                other_base=$(echo "$other_name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//' | sed 's/[[:space:]]*Gamepad.*$//' | sed 's/[[:space:]]*$//')
-                            fi
-                            
-                            # Check if base names match (accounting for Steam Input variations)
-                            if [ "$base_name" = "$other_base" ] && [ -n "$base_name" ]; then
+                            # If we have exactly 2x the expected controllers, pair devices
+                            # This handles the case where GUID/name matching failed but Steam Input created pairs
+                            if [ ${#valid_controllers[@]} -ge 4 ] && [ ${#grouped_controllers[@]} -lt $(( ${#valid_controllers[@]} / 2 )) ]; then
                                 group_members+=("$other_device")
                                 processed+=("$other_device")
-                                [ "$debug" = "1" ] && echo "[Debug] Grouping duplicate by name: $other_device ($other_name) with $device ($name)" >&2
+                                [ "$debug" = "1" ] && echo "[Debug] Grouping by Steam Input pairing heuristic: $other_device with $device" >&2
+                                break
                             fi
                         done
                     fi
@@ -435,6 +487,17 @@ getControllerCount() {
             
             count=${#grouped_controllers[@]}
             [ "$debug" = "1" ] && echo "[Debug] Grouped ${#valid_controllers[@]} devices into $count unique controller(s)" >&2
+            
+            # Fallback: If grouping didn't reduce the count enough and Steam is running,
+            # Steam Input likely created duplicates. Use halving as fallback.
+            # This handles edge cases where GUID/name matching fails
+            # Expected: 2 devices per controller with Steam Input, so count should be roughly half
+            local expected_count=$(( (${#valid_controllers[@]} + 1) / 2 ))
+            if [ "$count" -gt "$expected_count" ] && [ ${#valid_controllers[@]} -gt 1 ]; then
+                [ "$debug" = "1" ] && echo "[Debug] Grouping result ($count) higher than expected ($expected_count), using halving fallback" >&2
+                count=$expected_count
+                [ "$debug" = "1" ] && echo "[Debug] Adjusted count to $count controller(s)" >&2
+            fi
         else
             # No Steam running or no valid controllers, use direct count
             count=${#valid_controllers[@]}
