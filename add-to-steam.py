@@ -13,28 +13,181 @@ import re
 import struct
 import zlib
 import urllib.request
+import json
+import time
 
 # --- Config: Set up paths and app info dynamically for the current user ---
 HOME = os.path.expanduser("~")  # Get the current user's home directory
 APPNAME  = "Minecraft Splitscreen"  # Name as it will appear in Steam
 
-# Detect which launcher is being used (PollyMC only after cleanup)
+# Detect which launcher is being used (PollyMC or PrismLauncher)
 def detect_launcher():
-    """Detect PollyMC launcher for splitscreen gameplay."""
+    """Detect available launcher (PollyMC or PrismLauncher) for splitscreen gameplay."""
+    # #region agent log
+    log_data = {
+        "sessionId": "debug-session",
+        "runId": "run1",
+        "hypothesisId": "A",
+        "location": "add-to-steam.py:detect_launcher",
+        "message": "Starting launcher detection",
+        "data": {"home": HOME},
+        "timestamp": int(time.time() * 1000)
+    }
+    try:
+        with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+            f.write(json.dumps(log_data) + "\n")
+    except: pass
+    # #endregion
+    
     pollymc_path = f'{HOME}/.local/share/PollyMC/PollyMC-Linux-x86_64.AppImage'
     pollymc_script = f'{HOME}/.local/share/PollyMC/minecraftSplitscreen.sh'
+    prism_path = f'{HOME}/.local/share/PrismLauncher/PrismLauncher.AppImage'
+    prism_script = f'{HOME}/.local/share/PrismLauncher/minecraftSplitscreen.sh'
     
-    # Check for PollyMC (should be the only option after installer cleanup)
+    # #region agent log
+    log_data = {
+        "sessionId": "debug-session",
+        "runId": "run1",
+        "hypothesisId": "A",
+        "location": "add-to-steam.py:detect_launcher",
+        "message": "Checking PollyMC paths",
+        "data": {
+            "pollymc_path_exists": os.path.exists(pollymc_path),
+            "pollymc_path_executable": os.access(pollymc_path, os.X_OK) if os.path.exists(pollymc_path) else False,
+            "pollymc_script_exists": os.path.exists(pollymc_script)
+        },
+        "timestamp": int(time.time() * 1000)
+    }
+    try:
+        with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+            f.write(json.dumps(log_data) + "\n")
+    except: pass
+    # #endregion
+    
+    # Check for PollyMC first (legacy support)
     if os.path.exists(pollymc_path) and os.access(pollymc_path, os.X_OK):
         if os.path.exists(pollymc_script):
+            # #region agent log
+            log_data = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "A",
+                "location": "add-to-steam.py:detect_launcher",
+                "message": "PollyMC detected successfully",
+                "data": {"launcher": "PollyMC", "script": pollymc_script, "dir": f"{HOME}/.local/share/PollyMC"},
+                "timestamp": int(time.time() * 1000)
+            }
+            try:
+                with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps(log_data) + "\n")
+            except: pass
+            # #endregion
             return pollymc_script, f"{HOME}/.local/share/PollyMC", "PollyMC"
         else:
             # Use the script from current directory if PollyMC directory doesn't have it
+            # #region agent log
+            log_data = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "A",
+                "location": "add-to-steam.py:detect_launcher",
+                "message": "PollyMC found but script missing, using fallback",
+                "data": {"launcher": "PollyMC", "script": f"{HOME}/.local/share/PrismLauncher/minecraftSplitscreen.sh"},
+                "timestamp": int(time.time() * 1000)
+            }
+            try:
+                with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps(log_data) + "\n")
+            except: pass
+            # #endregion
             return f"{HOME}/.local/share/PrismLauncher/minecraftSplitscreen.sh", f"{HOME}/.local/share/PollyMC", "PollyMC"
     
-    # If PollyMC not found, something went wrong with installation
-    print("❌ Error: PollyMC not found!")
-    print("   Please run the Minecraft Splitscreen installer to set up PollyMC")
+    # #region agent log
+    log_data = {
+        "sessionId": "debug-session",
+        "runId": "run1",
+        "hypothesisId": "B",
+        "location": "add-to-steam.py:detect_launcher",
+        "message": "Checking PrismLauncher paths",
+        "data": {
+            "prism_path_exists": os.path.exists(prism_path),
+            "prism_path_executable": os.access(prism_path, os.X_OK) if os.path.exists(prism_path) else False,
+            "prism_script_exists": os.path.exists(prism_script)
+        },
+        "timestamp": int(time.time() * 1000)
+    }
+    try:
+        with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+            f.write(json.dumps(log_data) + "\n")
+    except: pass
+    # #endregion
+    
+    # Fallback: Check for PrismLauncher (since PollyMC was discontinued)
+    if os.path.exists(prism_path) and os.access(prism_path, os.X_OK):
+        if os.path.exists(prism_script):
+            # #region agent log
+            log_data = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "B",
+                "location": "add-to-steam.py:detect_launcher",
+                "message": "PrismLauncher detected successfully",
+                "data": {"launcher": "PrismLauncher", "script": prism_script, "dir": f"{HOME}/.local/share/PrismLauncher"},
+                "timestamp": int(time.time() * 1000)
+            }
+            try:
+                with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps(log_data) + "\n")
+            except: pass
+            # #endregion
+            return prism_script, f"{HOME}/.local/share/PrismLauncher", "PrismLauncher"
+        else:
+            # Check if script exists in current directory as fallback
+            current_dir_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "minecraftSplitscreen.sh")
+            if os.path.exists(current_dir_script):
+                # #region agent log
+                log_data = {
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "B",
+                    "location": "add-to-steam.py:detect_launcher",
+                    "message": "PrismLauncher found but script missing, using current directory script",
+                    "data": {"launcher": "PrismLauncher", "script": current_dir_script, "dir": f"{HOME}/.local/share/PrismLauncher"},
+                    "timestamp": int(time.time() * 1000)
+                }
+                try:
+                    with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+                        f.write(json.dumps(log_data) + "\n")
+                except: pass
+                # #endregion
+                return current_dir_script, f"{HOME}/.local/share/PrismLauncher", "PrismLauncher"
+    
+    # #region agent log
+    log_data = {
+        "sessionId": "debug-session",
+        "runId": "run1",
+        "hypothesisId": "C",
+        "location": "add-to-steam.py:detect_launcher",
+        "message": "No launcher found - error condition",
+        "data": {
+            "pollymc_path": pollymc_path,
+            "prism_path": prism_path,
+            "pollymc_exists": os.path.exists(pollymc_path),
+            "prism_exists": os.path.exists(prism_path)
+        },
+        "timestamp": int(time.time() * 1000)
+    }
+    try:
+        with open("/home/luis/Desktop/Projects/openrepos/myfork/MinecraftSplitscreenSteamdeck/.cursor/debug.log", "a") as f:
+            f.write(json.dumps(log_data) + "\n")
+    except: pass
+    # #endregion
+    
+    # If neither launcher found, show helpful error
+    print("❌ Error: No compatible Minecraft launcher found!")
+    print(f"   Expected PollyMC at: {pollymc_path}")
+    print(f"   Or PrismLauncher at: {prism_path}")
+    print("   Please run the Minecraft Splitscreen installer to set up a launcher")
     exit(1)
 
 EXE, STARTDIR, LAUNCHER_NAME = detect_launcher()
