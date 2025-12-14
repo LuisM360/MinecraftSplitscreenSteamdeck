@@ -209,35 +209,215 @@ restorePanels() {
 # =============================
 # Function: getControllerCount
 # =============================
-# Detects the number of controllers (1–4) by counting /dev/input/js* devices.
-# Steam Input (when Steam is running) creates duplicate devices, so we halve the count (rounding up).
+# Detects the number of external controllers (1–4) by counting /dev/input/js* devices.
+# Excludes Steam Deck built-in controller and handles Steam Input duplicates intelligently.
 # Ensures at least 1 and at most 4 controllers are reported.
+# 
 # Logic:
-#   - Counts all /dev/input/js* devices (joysticks/gamepads recognized by the system)
-#   - Checks if the main Steam client is running (native or Flatpak)
-#   - Only halves the count if the main Steam client is running (not just helpers)
-#   - Returns a value between 1 and 4 (inclusive)
+#   - Identifies all joystick/gamepad devices using /dev/input/js*
+#   - Excludes Steam Deck controller devices using udev properties
+#   - Groups duplicate devices created by Steam Input
+#   - Counts unique controller groups
+#   - Falls back to simpler detection if udevadm unavailable
+#
+# Debug output can be enabled by setting MINECRAFT_DEBUG=1 environment variable
 getControllerCount() {
-    local count
+    local debug="${MINECRAFT_DEBUG:-0}"
     local steam_running=0
-    # Count all joystick/gamepad devices
-    count=$(ls /dev/input/js* 2>/dev/null | wc -l)
-    # Only halve if the main Steam client is running (native or Flatpak)
-    #   - pgrep -x steam: native Steam client
-    #   - pgrep -f '^/app/bin/steam$': Flatpak Steam binary
-    #   - pgrep -f 'flatpak run com.valvesoftware.Steam': Flatpak Steam launcher
+    local devices=()
+    local excluded_devices=()
+    local controller_groups=()
+    local count=0
+    
+    # Check if Steam is running
     if pgrep -x steam >/dev/null \
         || pgrep -f '^/app/bin/steam$' >/dev/null \
         || pgrep -f 'flatpak run com.valvesoftware.Steam' >/dev/null; then
         steam_running=1
     fi
-    # If Steam is running, halve the count (rounding up) to account for Steam Input duplicates
-    if [ "$steam_running" -eq 1 ]; then
-        count=$(( (count + 1) / 2 ))
+    
+    # Collect all joystick devices
+    for js_device in /dev/input/js*; do
+        [ ! -e "$js_device" ] && continue
+        devices+=("$js_device")
+    done
+    
+    [ "$debug" = "1" ] && echo "[Debug] Found ${#devices[@]} joystick device(s)" >&2
+    
+    # If no devices found, return 1 (minimum)
+    if [ ${#devices[@]} -eq 0 ]; then
+        [ "$debug" = "1" ] && echo "[Debug] No controllers detected, defaulting to 1" >&2
+        echo "1"
+        return 0
     fi
+    
+    # Check if udevadm is available for device identification
+    if command -v udevadm >/dev/null 2>&1; then
+        # Use udevadm to identify and filter devices
+        local valid_controllers=()
+        local device_names=()
+        
+        for js_device in "${devices[@]}"; do
+            local is_steam_deck=0
+            local device_name=""
+            local vendor_id=""
+            local product_id=""
+            
+            # Get device properties using udevadm
+            local udev_info
+            udev_info=$(udevadm info -q property -n "$js_device" 2>/dev/null)
+            
+            if [ -n "$udev_info" ]; then
+                # Extract device name
+                device_name=$(echo "$udev_info" | grep -E "^ID_NAME=" | cut -d'=' -f2- | tr -d '"')
+                vendor_id=$(echo "$udev_info" | grep -E "^ID_VENDOR_ID=" | cut -d'=' -f2- | tr -d '"')
+                product_id=$(echo "$udev_info" | grep -E "^ID_MODEL_ID=" | cut -d'=' -f2- | tr -d '"')
+                
+                # Check if this is a Steam Deck controller
+                # Steam Deck controller identifiers:
+                # - Device name contains "Steam Deck" or "Valve"
+                # - Vendor ID 28de (Valve Corporation)
+                # - Device path might indicate built-in controller
+                if echo "$device_name" | grep -qiE "steam.*deck|valve.*controller" \
+                    || [ "$vendor_id" = "28de" ] \
+                    || echo "$js_device" | grep -qE "event[0-9]+.*steam"; then
+                    # Additional check: verify it's actually the built-in controller
+                    # by checking if it's a system device (not USB)
+                    local sys_path
+                    sys_path=$(echo "$udev_info" | grep -E "^DEVPATH=" | cut -d'=' -f2-)
+                    if echo "$sys_path" | grep -qE "platform|pci.*0000:00" || [ -z "$sys_path" ]; then
+                        is_steam_deck=1
+                    fi
+                fi
+            else
+                # Fallback: check device name from /sys
+                local sys_name_path="/sys/class/input/$(basename "$js_device" | sed 's/js/input/')/device/name"
+                if [ -f "$sys_name_path" ]; then
+                    device_name=$(cat "$sys_name_path" 2>/dev/null)
+                    if echo "$device_name" | grep -qiE "steam.*deck|valve.*controller"; then
+                        is_steam_deck=1
+                    fi
+                fi
+            fi
+            
+            if [ "$is_steam_deck" -eq 1 ]; then
+                excluded_devices+=("$js_device")
+                [ "$debug" = "1" ] && echo "[Debug] Excluding Steam Deck controller: $js_device ($device_name)" >&2
+            else
+                valid_controllers+=("$js_device")
+                device_names+=("$device_name")
+                [ "$debug" = "1" ] && echo "[Debug] Valid controller: $js_device ($device_name)" >&2
+            fi
+        done
+        
+        # Group duplicate devices created by Steam Input
+        # Steam Input typically creates devices with similar names but different suffixes
+        if [ "$steam_running" -eq 1 ] && [ ${#valid_controllers[@]} -gt 0 ]; then
+            local grouped_controllers=()
+            local processed=()
+            
+            for i in "${!valid_controllers[@]}"; do
+                local device="${valid_controllers[$i]}"
+                local name="${device_names[$i]}"
+                
+                # Check if we've already processed this device
+                local already_processed=0
+                for proc_dev in "${processed[@]}"; do
+                    [ "$proc_dev" = "$device" ] && already_processed=1 && break
+                done
+                [ "$already_processed" -eq 1 ] && continue
+                
+                # Try to find duplicates of this device
+                local base_name=""
+                if [ -n "$name" ]; then
+                    # Extract base name (remove Steam Input suffixes)
+                    base_name=$(echo "$name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//')
+                fi
+                
+                # Count this device and its potential duplicates
+                local group_count=1
+                processed+=("$device")
+                
+                if [ -n "$base_name" ]; then
+                    # Look for other devices with similar names
+                    for j in "${!valid_controllers[@]}"; do
+                        [ "$i" -eq "$j" ] && continue
+                        local other_device="${valid_controllers[$j]}"
+                        local other_name="${device_names[$j]}"
+                        
+                        # Check if already processed
+                        local already_proc=0
+                        for proc_dev in "${processed[@]}"; do
+                            [ "$proc_dev" = "$other_device" ] && already_proc=1 && break
+                        done
+                        [ "$already_proc" -eq 1 ] && continue
+                        
+                        # Check if names match (accounting for Steam Input variations)
+                        local other_base=$(echo "$other_name" | sed 's/[[:space:]]*Steam.*$//' | sed 's/[[:space:]]*Virtual.*$//')
+                        if [ "$base_name" = "$other_base" ] || [ -z "$base_name" ] && [ -z "$other_base" ]; then
+                            group_count=$((group_count + 1))
+                            processed+=("$other_device")
+                            [ "$debug" = "1" ] && echo "[Debug] Grouping duplicate: $other_device with $device" >&2
+                        fi
+                    done
+                fi
+                
+                # Add one controller per group
+                grouped_controllers+=("$device")
+            done
+            
+            count=${#grouped_controllers[@]}
+            [ "$debug" = "1" ] && echo "[Debug] Grouped ${#valid_controllers[@]} devices into $count unique controller(s)" >&2
+        else
+            # No Steam running or no valid controllers, use direct count
+            count=${#valid_controllers[@]}
+            [ "$debug" = "1" ] && echo "[Debug] Counting ${#valid_controllers[@]} controller(s) directly" >&2
+        fi
+    else
+        # Fallback: udevadm not available, use simpler detection
+        [ "$debug" = "1" ] && echo "[Debug] udevadm not available, using fallback detection" >&2
+        
+        count=${#devices[@]}
+        
+        # Simple exclusion: try to identify Steam Deck controller by device path
+        # Steam Deck controller is often js0 or appears early in the sequence
+        # This is a heuristic and may not be perfect
+        local potential_steam_deck=0
+        for js_device in "${devices[@]}"; do
+            # Check if device name suggests Steam Deck (heuristic)
+            if echo "$js_device" | grep -qE "js0$" && [ ${#devices[@]} -gt 1 ]; then
+                # If we have multiple devices and js0 exists, it might be Steam Deck
+                # But we can't be sure without udevadm, so we'll be conservative
+                potential_steam_deck=1
+            fi
+        done
+        
+        # If Steam is running, halve the count (rounding up) as fallback
+        if [ "$steam_running" -eq 1 ]; then
+            # Subtract potential Steam Deck controller
+            if [ "$potential_steam_deck" -eq 1 ] && [ "$count" -gt 1 ]; then
+                count=$((count - 1))
+                [ "$debug" = "1" ] && echo "[Debug] Excluding potential Steam Deck controller (heuristic)" >&2
+            fi
+            # Halve remaining count for Steam Input duplicates
+            count=$(( (count + 1) / 2 ))
+            [ "$debug" = "1" ] && echo "[Debug] Halving count for Steam Input duplicates: $count" >&2
+        else
+            # No Steam, subtract potential Steam Deck if detected
+            if [ "$potential_steam_deck" -eq 1 ] && [ "$count" -gt 1 ]; then
+                count=$((count - 1))
+                [ "$debug" = "1" ] && echo "[Debug] Excluding potential Steam Deck controller (heuristic)" >&2
+            fi
+        fi
+    fi
+    
     # Clamp the count between 1 and 4
     [ "$count" -gt 4 ] && count=4
     [ "$count" -lt 1 ] && count=1
+    
+    [ "$debug" = "1" ] && echo "[Debug] Final controller count: $count" >&2
+    [ "$debug" = "1" ] && echo "[Debug] Excluded ${#excluded_devices[@]} Steam Deck device(s)" >&2
+    
     # Output the detected controller count
     echo "$count"
 }
