@@ -76,7 +76,28 @@ create_instances() {
             for i in {1..4}; do
                 local instance_name="latestUpdate-$i"
                 if [[ -d "$pollymc_dir/instances/$instance_name" ]]; then
+                    local dest_instance="$TARGET_DIR/instances/$instance_name"
+                    local dest_saves="$dest_instance/.minecraft/saves"
+                    local source_saves="$pollymc_dir/instances/$instance_name/.minecraft/saves"
+                    
+                    # Defensive measure: preserve workspace saves if they exist and PollyMC has no saves
+                    local temp_saves_backup=""
+                    if [[ -d "$dest_saves" ]] && [[ ! -d "$source_saves" ]]; then
+                        print_info "     → Preserving existing worlds in workspace for $instance_name (PollyMC has no saves)"
+                        temp_saves_backup=$(mktemp -d -t saves_backup_XXXXXX)
+                        cp -r "$dest_saves" "$temp_saves_backup/${instance_name}_saves"
+                    fi
+                    
+                    # Copy instance from PollyMC to workspace (PollyMC saves will overwrite workspace saves)
                     cp -r "$pollymc_dir/instances/$instance_name" "$TARGET_DIR/instances/"
+                    
+                    # Restore workspace saves only if PollyMC had no saves (defensive fallback)
+                    if [[ -n "$temp_saves_backup" ]] && [[ -d "$temp_saves_backup/${instance_name}_saves" ]]; then
+                        mkdir -p "$dest_instance/.minecraft"
+                        cp -r "$temp_saves_backup/${instance_name}_saves" "$dest_saves"
+                        rm -rf "$temp_saves_backup"
+                        print_info "     → Restored workspace worlds for $instance_name (PollyMC had none)"
+                    fi
                 fi
             done
             # Now use the TARGET_DIR for processing

@@ -108,24 +108,36 @@ setup_pollymc() {
                 if [[ -d "$instance_path" ]]; then
                     print_info "   → Updating $instance_name while preserving settings"
                     
+                    # Create a temporary directory for backups
+                    local backup_dir="$HOME/.local/share/PollyMC/options_backup"
+                    mkdir -p "$backup_dir"
+                    
                     # Backup options.txt if it exists
                     if [[ -f "$options_file" ]]; then
                         print_info "     → Preserving existing options.txt for $instance_name"
-                        # Create a temporary directory for backups
-                        local backup_dir="$HOME/.local/share/PollyMC/options_backup"
-                        mkdir -p "$backup_dir"
                         # Copy with path structure to keep track of which instance it belongs to
                         cp "$options_file" "$backup_dir/${instance_name}_options.txt"
                     fi
                     
-                    # Remove old instance but keep options backup
+                    # Backup saves directory if it exists (preserve worlds)
+                    local saves_dir="$instance_path/.minecraft/saves"
+                    if [[ -d "$saves_dir" ]]; then
+                        print_info "     → Preserving existing worlds for $instance_name"
+                        # Create saves backup directory
+                        local saves_backup_dir="$HOME/.local/share/PollyMC/saves_backup"
+                        mkdir -p "$saves_backup_dir"
+                        # Copy entire saves directory for this instance
+                        cp -r "$saves_dir" "$saves_backup_dir/${instance_name}_saves"
+                    fi
+                    
+                    # Remove old instance but keep backups
                     rm -rf "$instance_path"
                 fi
             done
         fi
         
-        # Copy the updated instances while excluding options.txt files
-        rsync -a --exclude='*.minecraft/options.txt' "$TARGET_DIR/instances/"* "$HOME/.local/share/PollyMC/instances/"
+        # Copy the updated instances while excluding options.txt files and saves directories
+        rsync -a --exclude='*.minecraft/options.txt' --exclude='*.minecraft/saves' "$TARGET_DIR/instances/"* "$HOME/.local/share/PollyMC/instances/"
         
         # Restore options.txt files from temporary backup location
         local backup_dir="$HOME/.local/share/PollyMC/options_backup"
@@ -142,11 +154,29 @@ setup_pollymc() {
             fi
         done
         
+        # Restore saves directories from temporary backup location
+        local saves_backup_dir="$HOME/.local/share/PollyMC/saves_backup"
+        for i in {1..4}; do
+            local instance_name="latestUpdate-$i"
+            local instance_path="$HOME/.local/share/PollyMC/instances/$instance_name"
+            local saves_dir="$instance_path/.minecraft/saves"
+            local backup_saves="$saves_backup_dir/${instance_name}_saves"
+            
+            if [[ -d "$backup_saves" ]]; then
+                print_info "   → Restoring saved worlds for $instance_name"
+                mkdir -p "$(dirname "$saves_dir")"
+                cp -r "$backup_saves" "$saves_dir"
+            fi
+        done
+        
         print_success "✅ Splitscreen instances migrated to PollyMC"
         
-        # Clean up the temporary backup directory
+        # Clean up the temporary backup directories
         if [[ -d "$backup_dir" ]]; then
             rm -rf "$backup_dir"
+        fi
+        if [[ -d "$saves_backup_dir" ]]; then
+            rm -rf "$saves_backup_dir"
         fi
         
         # INSTANCE COUNT VERIFICATION: Ensure all 4 instances were copied successfully
